@@ -1,0 +1,50 @@
+require('dotenv').config();
+const express = require('express');
+const cors = require('cors');
+const helmet = require('helmet');
+const authMiddleware = require('./middleware/auth.middleware');
+const apiLimiter = require('./middleware/rateLimit.middleware');
+const { handleExtract, handleStream } = require('./controllers/media.controller');
+
+const app = express();
+
+// Trust Google Cloud Run reverse proxy for accurate IP rate-limiting and HTTPS protocol detection
+app.set('trust proxy', 1);
+
+// Security & CORS Middlewares
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: 'cross-origin' }
+}));
+app.use(cors({
+  origin: process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : '*',
+  methods: ['GET', 'POST', 'OPTIONS']
+}));
+app.use(express.json({ limit: '1mb' }));
+
+// 1. Health Check Endpoint (Required for Cloud Run readiness probes)
+app.get('/api/v1/health', (req, res) => {
+  res.status(200).json({
+    status: 'ok',
+    service: 'Vurix Extraction Engine v2.0',
+    timestamp: new Date().toISOString()
+  });
+});
+
+// 2. Metadata & Format Extraction Endpoint
+app.post('/api/v1/extract', apiLimiter, authMiddleware, handleExtract);
+
+// 3. Direct High-Speed Zero-Disk Download Stream Endpoint
+app.get('/api/v1/stream', apiLimiter, handleStream);
+
+// Global 404 Handler
+app.use((req, res) => {
+  res.status(404).json({
+    success: false,
+    error: 'Endpoint not found. Use POST /api/v1/extract or GET /api/v1/stream'
+  });
+});
+
+const PORT = process.env.PORT || 8080;
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`[VURIX API] Server listening on http://0.0.0.0:${PORT}`);
+});
